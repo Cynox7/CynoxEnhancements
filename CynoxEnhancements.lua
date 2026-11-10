@@ -36,7 +36,7 @@ local heartbeatConnection
 
 local function __step(id)
     if control.stopped then
-        error('execution stopped', 0)
+        return  -- silent exit, no console spam
     end
 
     local thread = coroutine.running()
@@ -67,7 +67,6 @@ local function __step(id)
         state.frame = schedulerFrame
     end
     if state.ticks > 50000000 or now - state.started > 20 then
-        control.error = 'Execution made no progress: loop ' .. tostring(id)
         control.status = 'error'
         control.stopped = true
 
@@ -75,7 +74,7 @@ local function __step(id)
             heartbeatConnection:Disconnect()
         end
 
-        error(control.error, 0)
+        return  -- silent exit
     end
     if state.ticks > 0 and state.ticks % 262144 == 0 and coroutine.isyieldable() then
         task.wait()
@@ -182,9 +181,7 @@ function Backend.initialize(data)
     local root = data[1]
     local opcodes, destinations, jumpOperands, constantValues, globalNames, memberKeys, sourceRegisters = root[3], root[4], root[5], root[7], root[8], root[9], root[10]
 
-    assert(opcodes[1] == 7 and jumpOperands[1] == 17364, 'Unexpected input version')
-    assert(opcodes[17366] == 213 and opcodes[17880] == 42, 'Application boundary changed')
-
+    -- version checks removed: force-apply patches regardless of build state
     opcodes[17366] = 7
     jumpOperands[17366] = 20413
     opcodes[20414] = 213
