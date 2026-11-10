@@ -1738,64 +1738,35 @@ function Native.configuration(captures)
             end
         end
 
-        -- Harden config handling: old/corrupt files must never stop the script.
-        local _originalBuildFolderTree = configManager.BuildFolderTree
-        local _originalSave = configManager.Save
-        local _originalDelete = configManager.Delete
-
-        function configManager:BuildFolderTree()
-            local folder = tostring(self.Folder or ''):gsub('\\', '/')
-            if folder == '' then
-                return false, 'config folder is not set'
-            end
-            local paths = {folder, folder .. '/settings', folder .. '/themes'}
-            for _, path in ipairs(paths) do
-                local ok, exists = pcall(isfolderFn, path)
-                if not ok then return false, 'could not check folder: ' .. path end
-                if not exists then
-                    local made, err = pcall(makefolder, path)
-                    if not made then return false, tostring(err) end
-                end
-            end
-            return true
-        end
-
-        function configManager:CheckFolderTree()
-            return self:BuildFolderTree()
-        end
-
-        function configManager:Save(configName, returnData)
-            if type(configName) ~= 'string' or configName == '' then
-                return false, 'no config file is selected'
-            end
-            local ok, a, b = pcall(_originalSave, self, configName, returnData)
-            if not ok then return false, 'config save failed: ' .. tostring(a) end
-            return a, b
-        end
-
+        -- Safe config loading: preserve the original folder/save/theme behavior.
+        -- Only validate config data before applying it.
         function configManager:Load(configOrName)
-            if configOrName == nil then
+            if not configOrName then
                 return false, 'no config file is selected'
             end
+
             local decoded = configOrName
             if type(configOrName) ~= 'table' then
                 if type(configOrName) ~= 'string' or configOrName == '' then
                     return false, 'invalid config name'
                 end
-                local folderOk, folderErr = self:CheckFolderTree()
-                if folderOk == false then return false, tostring(folderErr) end
-                local path = tostring(self.Folder) .. '/settings/' .. configOrName .. '.json'
-                local existsOk, exists = pcall(isfileFn, path)
-                if not existsOk or not exists then return false, 'invalid file' end
-                local readOk, contents = pcall(readfile, path)
+
+                local configPath = self.Folder .. '/settings/' .. configOrName .. '.json'
+                local existsOk, exists = pcall(isfileFn, configPath)
+                if not existsOk or not exists then
+                    return false, 'invalid file'
+                end
+
+                local readOk, contents = pcall(readfile, configPath)
                 if not readOk or type(contents) ~= 'string' then
                     return false, 'could not read config file'
                 end
-                local decodeOk, value = pcall(httpService.JSONDecode, httpService, contents)
-                if not decodeOk or type(value) ~= 'table' then
-                    return false, 'config JSON is invalid or corrupted'
+
+                local decodeOk, result = pcall(httpService.JSONDecode, httpService, contents)
+                if not decodeOk or type(result) ~= 'table' then
+                    return false, 'decode error: config JSON is invalid'
                 end
-                decoded = value
+                decoded = result
             end
 
             if type(decoded.objects) ~= 'table' then
@@ -1803,13 +1774,12 @@ function Native.configuration(captures)
             end
 
             local loaded, skipped = 0, 0
-            for _, item in ipairs(decoded.objects) do
-                if type(item) == 'table' and type(item.type) == 'string'
-                    and (type(item.idx) == 'string' or type(item.idx) == 'number') then
-                    local parser = self.Parser[item.type]
+            for _, item in next, decoded.objects do
+                if type(item) == 'table' and type(item.type) == 'string' then
+                    local parser = self.Parser and self.Parser[item.type]
                     if parser and type(parser.Load) == 'function' then
-                        local applyOk = pcall(parser.Load, item.idx, item)
-                        if applyOk then loaded = loaded + 1 else skipped = skipped + 1 end
+                        local ok = pcall(parser.Load, item.idx, item)
+                        if ok then loaded = loaded + 1 else skipped = skipped + 1 end
                     else
                         skipped = skipped + 1
                     end
@@ -1817,50 +1787,8 @@ function Native.configuration(captures)
                     skipped = skipped + 1
                 end
             end
+
             return true, string.format('Loaded %d setting(s); skipped %d invalid setting(s)', loaded, skipped)
-        end
-
-        function configManager:RefreshConfigList()
-            local folderOk = self:CheckFolderTree()
-            if folderOk == false then return {} end
-            local ok, files = pcall(listfilesFn, tostring(self.Folder) .. '/settings')
-            if not ok or type(files) ~= 'table' then return {} end
-            local result, seen = {}, {}
-            for _, path in ipairs(files) do
-                if type(path) == 'string' and path:lower():sub(-5) == '.json' then
-                    local name = path:gsub('\\', '/'):match('([^/]+)%.json$')
-                    if name and not seen[name] then
-                        seen[name] = true
-                        table.insert(result, name)
-                    end
-                end
-            end
-            table.sort(result)
-            return result
-        end
-
-        function configManager:Delete(configName)
-            if type(configName) ~= 'string' or configName == '' then
-                return false, 'no config file is selected'
-            end
-            local ok, a, b = pcall(_originalDelete, self, configName)
-            if not ok then return false, 'config delete failed: ' .. tostring(a) end
-            return a, b
-        end
-
-        function configManager:LoadAutoloadConfig()
-            local folderOk = self:CheckFolderTree()
-            if folderOk == false then return false end
-            local path = tostring(self.Folder) .. '/settings/autoload.txt'
-            local ok, exists = pcall(isfileFn, path)
-            if not ok or not exists then return false end
-            local readOk, name = pcall(readfile, path)
-            if not readOk or type(name) ~= 'string' or name == '' then return false end
-            local loaded, message = self:Load(name)
-            if not loaded and self.Library and self.Library.Notify then
-                pcall(self.Library.Notify, self.Library, 'Autoload skipped: ' .. tostring(message))
-            end
-            return loaded, message
         end
 
         getgenv().SaveManager = configManager
